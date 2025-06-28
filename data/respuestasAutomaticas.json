@@ -1,0 +1,21 @@
+{
+  "3": [
+    {
+      "emisor": "todos",
+      "mensaje": "hola bot",
+      "respuesta": "¡Hola! ¿En qué puedo ayudarte?"
+    },
+    {
+      "emisor": "5491121633263@c.us",
+      "mensaje": "hola bb",
+      "respuesta": "¡Hola! ¿dime?"
+    }
+  ],
+  "4": [
+    {
+      "emisor": "5491132434536@c.us",
+      "mensaje": "hola so",
+      "respuesta": "¡Hello!"
+    }
+  ]
+}
