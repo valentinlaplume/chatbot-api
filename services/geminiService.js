@@ -22,76 +22,111 @@ const MAX_HISTORIAL_GEMINI = 10; // Número de mensajes a enviar a Gemini para c
  * @param {Array<object>} historialConversacion - Array de objetos de historial en formato { role: "user"|"model", parts: [{ text: "..." }] }.
  * @returns {Promise<string>} La respuesta generada por Gemini.
  */
-async function getGeminiResponse(
-  userMessage,
-  enterpriseData,
-  historialConversacion
-) {
-  try {
-    const fullPrompt = `Eres un asistente virtual para el emprendimiento "${
-      enterpriseData.nombre
-    }". Su rubro es "${
-      enterpriseData.rubro || "general"
-    }" y su descripción es: "${
-      enterpriseData.descripcion || "No se proporcionó descripción."
-    }". Siempre responde en español y sé amigable. No respondas preguntas que no estén relacionadas con el emprendimiento. Si el usuario pregunta por "turnos" o "reservas", redirígelo a la función de manejo de turnos. Si te hacen una pregunta que está claramente fuera del alcance de la información proporcionada del negocio, amablemente indica que no puedes ayudar con eso.
+async function getGeminiResponse(userMessage, enterpriseData, historialConversacion) {
+    try {
+        const {
+            id, 
+            nombre, 
+            nombreNegocio, 
+            rubro = 'general',
+            descripcion = 'No se proporcionó descripción.',
+            telefono,
+            mail, // Mail de LOGIN/REGISTRO del usuario
+            mailContacto = [], // <--- ¡AHORA ES UN ARRAY POR DEFECTO!
+            horariosAtencion = 'Lunes a Viernes de 9 a 18 hs.',
+            direccion = 'Consultar ubicación exacta',
+            urlReserva, 
+            enlacesUtiles = {}, 
+            configChatbot = {} 
+        } = enterpriseData;
 
-        Este es el mensaje del usuario: "${userMessage}"`;
+        const {
+            nombreChatbot = 'Asistente Virtual',
+            personalidad = 'amigable y profesional',
+            ejemplosModismos = [],
+            cantidadMaximaEmojis = 2 
+        } = configChatbot;
 
-    // Normalizar y limitar el historial para Gemini
-    // Aseguramos que el historial sea un array de objetos { role: string, parts: [{ text: string }] }
-    const geminiHistory = historialConversacion
-      .slice(-MAX_HISTORIAL_GEMINI * 2)
-      .map((item) => {
-        if (
-          item &&
-          item.role &&
-          Array.isArray(item.parts) &&
-          item.parts.length > 0 &&
-          item.parts[0].text
-        ) {
-          return {
-            role: item.role,
-            parts: [{ text: String(item.parts[0].text) }], // Asegura que 'text' sea string y no tenga anidaciones
-          };
+        const linkWeb = enlacesUtiles.web || 'no disponible';
+        const linkFacebook = enlacesUtiles.facebook || 'no disponible';
+        const linkInstagram = enlacesUtiles.instagram || 'no disponible';
+
+        const nombreParaChatbot = nombreNegocio || nombre || "tu emprendimiento";
+
+        // Lógica para mostrar múltiples emails o el email de login
+        let emailsParaChatbot = 'No especificado';
+        if (Array.isArray(mailContacto) && mailContacto.length > 0) {
+            emailsParaChatbot = mailContacto.join(', '); // Une los correos con coma
+        } else if (mail) {
+            emailsParaChatbot = mail; // Fallback al mail de login si no hay mails de contacto
         }
-        return null; // Si el elemento no tiene el formato esperado, se ignora
-      })
-      .filter((item) => item !== null); // Eliminar elementos nulos
 
-    // Añadir el prompt inicial como un mensaje del sistema si aún no está presente
-    // La API de Gemini no tiene un "system" role directo para chat. Se incorpora en el primer mensaje de usuario o en el historial.
-    // Aquí lo haremos parte del historial para el contexto.
-    // Se puede considerar un "primer mensaje" simulado o añadir al historial de forma programática.
-    // Para este caso, ya lo tenemos en fullPrompt, que será manejado implícitamente por el chat.sendMessage al final.
+        // Construir la instrucción inicial para Gemini
+        const initialSystemInstruction = `
+            Eres un asistente virtual de IA llamado '${nombreChatbot}'.
+            Trabajas para el emprendimiento '${nombreParaChatbot}', cuyo rubro es '${rubro}'.
+            Aquí tienes una descripción detallada del negocio:
+            "${descripcion}"
 
-    // Iniciar la sesión de chat con el historial
-    const chat = model.startChat({
-      history: geminiHistory, // Pasa el historial normalizado
-      generationConfig: {
-        maxOutputTokens: 500, // Ajusta según tus necesidades
-      },
-    });
+            Información de contacto y operativa:
+            - Horarios de atención: ${horariosAtencion}
+            - Dirección: ${direccion}
+            - Teléfono: ${telefono || 'No especificado'}
+            - Email(s) de contacto: ${emailsParaChatbot} 
+            ${urlReserva ? `- Enlace para reservas: ${urlReserva}` : ''}
+            - Link Web: ${linkWeb}
+            - Link Facebook: ${linkFacebook}
+            ${linkInstagram !== 'no disponible' ? `- Link Instagram: ${linkInstagram}` : ''}
 
-    // Enviar el mensaje actual del usuario
-    // El fullPrompt se maneja internamente como el "primer mensaje" que Gemini verá para contextualizar.
-    const result = await chat.sendMessage(fullPrompt); // Enviamos el prompt completo incluyendo el mensaje del usuario
+            Tu personalidad y estilo de comunicación deben ser los siguientes:
+            "${personalidad}"
+            ${ejemplosModismos.length > 0 ? `Incorpora estos modismos suavemente: ${ejemplosModismos.join(', ')}.` : ''}
+            No uses más de ${cantidadMaximaEmojis} emojis por respuesta.
+            Siempre responde en español.
+            Solo responde preguntas directamente relacionadas con los servicios y la información proporcionada sobre '${nombreParaChatbot}'. Si la pregunta no está relacionada, amablemente indica que no puedes ayudar con ese tema.
+            Si el usuario pregunta por "turnos", "reservas" o "citas", **no intentes agendarlos tú**. En su lugar, redirígelos a la función de manejo de turnos que el sistema tiene configurada (menciona que se le guiará para ello).
+            Evita inventar información. Si no sabes algo, dilo.
+            Ofrece ser útil y pregunta si hay algo más en lo que puedas asistir al cliente.
+        `;
 
-    const response = await result.response;
-    const text = response.text();
+        const geminiHistory = historialConversacion.slice(-MAX_HISTORIAL_GEMINI * 2).map(item => {
+            if (item && item.role && Array.isArray(item.parts) && item.parts.length > 0 && item.parts[0].text) {
+                return {
+                    role: item.role,
+                    parts: [{ text: String(item.parts[0].text) }]
+                };
+            }
+            return null;
+        }).filter(item => item !== null);
 
-    return text;
-  } catch (error) {
-    console.error("Error al obtener respuesta de Gemini:", error);
-    // Si el error es una instancia de GoogleGenerativeAIFetchError, puedes inspeccionar error.status
-    if (error.status === 400) {
-      console.error("Detalles del error 400 de Gemini:", error.errorDetails);
-      // Podrías intentar un reintento con menos historial o un historial vacío aquí
+        const contextualizedHistory = [{
+            role: "user",
+            parts: [{ text: initialSystemInstruction }]
+        }, {
+            role: "model",
+            parts: [{ text: "¡Hola! ¿En qué puedo ayudarte hoy?" }]
+        }, ...geminiHistory];
+
+        const chat = model.startChat({
+            history: contextualizedHistory,
+            generationConfig: {
+                maxOutputTokens: 500,
+            },
+        });
+
+        const result = await chat.sendMessage(userMessage);
+        const response = await result.response;
+        const text = response.text();
+
+        return text;
+
+    } catch (error) {
+        console.error("Error al obtener respuesta de Gemini:", error);
+        if (error.status === 400) {
+            console.error("Detalles del error 400 de Gemini:", error.errorDetails);
+        }
+        throw new Error("Lo siento, no pude generar una respuesta en este momento. Por favor, intenta de nuevo más tarde.");
     }
-    throw new Error(
-      "Lo siento, no pude generar una respuesta en este momento. Por favor, intenta de nuevo más tarde."
-    );
-  }
 }
 
 module.exports = {

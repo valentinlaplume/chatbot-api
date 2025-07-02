@@ -112,26 +112,30 @@ async function getEnterpriseDataByInstanceId(instanceId) {
 }
 
 /**
- * Placeholder para la lógica de procesamiento de solicitudes de turnos/reservas.
- * Implementa aquí la lógica real para interactuar con tu sistema de turnos.
+ * Procesa un mensaje de usuario para solicitudes de turnos/reservas.
+ * Reconoce palabras clave y devuelve una respuesta predefinida con un enlace.
  * @param {string} senderId - El ID del usuario de WhatsApp (cliente final).
  * @param {string} message - El mensaje del usuario.
  * @param {object} enterpriseData - Datos del emprendimiento.
  * @returns {Promise<string>} La respuesta del bot sobre el turno/reserva.
  */
 async function processTurnoRequest(senderId, message, enterpriseData) {
-  console.log(
-    `🤖 Solicitud de turno/reserva recibida para ${enterpriseData.nombre} desde ${senderId}: "${message}"`
-  );
-  // --- AQUÍ VA TU LÓGICA REAL PARA TURNOS/RESERVAS ---
-  // Ejemplos:
-  // 1. Parsear el mensaje para extraer fecha, hora, servicio.
-  // 2. Consultar disponibilidad en Google Calendar (usando enterpriseData.googleTokens y calendarService).
-  // 3. Confirmar o proponer nuevos horarios.
-  // 4. Guardar el turno en Firebase o tu base de datos de turnos.
+  const lowerCaseMessage = message.toLowerCase();
 
-  // Por ahora, solo una respuesta de prueba:
-  return `¡Hola! Entiendo que quieres ${message}. Para agendar un turno con ${enterpriseData.nombre}, por favor visita nuestro sitio web o espera a que uno de nuestros agentes te contacte.`;
+  // Ahora usamos 'urlReserva' desde enterpriseData
+  const urlReserva = enterpriseData.urlReserva || "NO DISPONIBLE ACTUALMENTE"; // Asegúrate de que este campo esté en Firebase
+  const nombreNegocio =
+    enterpriseData.nombreNegocio || "nosotros";
+
+  if (
+    lowerCaseMessage.includes("turno") ||
+    lowerCaseMessage.includes("reservar") ||
+    lowerCaseMessage.includes("cita")
+  ) {
+    return `¡Claro! Para agendar un turno o una cita con ${nombreNegocio}, por favor visita nuestro sistema de reservas online aquí: ${urlReserva}. ¡Es súper fácil y rápido! Si tenés alguna otra consulta, no dudes en preguntar. 😊`;
+  }
+
+  return `Entiendo que tu mensaje podría estar relacionado con turnos, pero no estoy segura de qué necesitas exactamente. ¿Podrías ser más específica/o?`;
 }
 
 module.exports = {
@@ -145,6 +149,6 @@ module.exports = {
   guardarTokens,
   obtenerTokens,
   // --- NUEVAS EXPORTACIONES PARA CHATBOT ---
-  getEnterpriseDataByInstanceId, // <--- EXPORTAR ESTA FUNCIÓN
-  processTurnoRequest, // <--- EXPORTAR ESTA FUNCIÓN
+  getEnterpriseDataByInstanceId, 
+  processTurnoRequest, 
 };

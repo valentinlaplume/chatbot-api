@@ -14,4 +14,5 @@ router.get("/:id", checkAuth, usuarioController.obtener); // Obtener uno por ID
 router.put("/:id", checkAuth, usuarioController.editar); // Editar
 router.delete("/:id", checkAuth, usuarioController.desactivar); // Desactivar
 
+
 module.exports = router;

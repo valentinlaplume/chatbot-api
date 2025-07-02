@@ -58,35 +58,54 @@ async function crear(req, res) {
       mail,
       nombre,
       apellido,
-      estado,
-      fechaAlta,
-      fechaModificacion,
+      // Estado y fechas se manejan por defecto en el servicio o modelo
     } = req.body;
 
+    // Validación de campos requeridos al crear (solo los básicos)
     if (!usuario || !password || !telefono || !mail || !nombre || !apellido) {
-      return res.status(400).json({ error: "Faltan campos requeridos" });
+      return res
+        .status(400)
+        .json({ error: "Faltan campos requeridos para crear el usuario." });
     }
 
+    // El servicio _usuarioService.crear debe encargarse del hashing de la contraseña
+    // y de establecer valores por defecto para estado, fechaAlta, fechaModificacion.
     const nuevoUsuario = {
       usuario,
-      password,
+      password, // Aquí password está en texto plano, _usuarioService.crear debe hashearlo
       telefono,
       mail,
       nombre,
       apellido,
-      estado: estado !== undefined ? estado : true,
-      fechaAlta: fechaAlta || new Date().toISOString(),
-      fechaModificacion: fechaModificacion || null,
     };
 
     const user = await _usuarioService.crear(nuevoUsuario);
-    res.status(201).json({ success: true, mensaje: "Usuario creado", user });
+    
+    // Excluimos la contraseña del objeto user antes de enviarlo
+    const { password: newUserPassword, ...userWithoutPassword } = user;
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: "Usuario creado exitosamente.",
+        user: userWithoutPassword,
+      });
   } catch (error) {
+    // Manejar errores específicos si el usuario ya existe, por ejemplo
+    if (error.message.includes("ya existe")) {
+      // Asumiendo que _usuarioService podría lanzar este error
+      return res.status(409).json({ error: error.message });
+    }
+    console.error("Error al crear usuario:", error);
     res
       .status(500)
-      .json({ error: "Error al crear usuario", detalle: error.message });
+      .json({
+        error: "Error interno del servidor al crear usuario.",
+        detalle: error.message,
+      });
   }
 }
+
 
 /**
  * Listar todos los usuarios
@@ -120,55 +139,54 @@ async function obtener(req, res) {
 }
 
 /**
- * Editar usuario
+ * Editar usuario (permite actualizar cualquier campo, incluyendo la configuración del chatbot)
  */
 async function editar(req, res) {
+  const { id } = req.params;
+  
+  // 1. Verificación de autorización: solo el propio usuario puede editar su perfil
+  if (req.user.idUsuario !== id) {
+      return res.status(403).json({ error: "No autorizado para editar este usuario. Solo puedes editar tu propio perfil." });
+  }
+
+  // 2. Captura todos los datos del cuerpo de la solicitud
+  const datosActualizar = { ...req.body }; // Hacemos una copia para no modificar req.body directamente
+
+  // 3. Validación básica: si el cuerpo de la solicitud está vacío
+  if (Object.keys(datosActualizar).length === 0) {
+      return res.status(400).json({ error: "Nada para actualizar. El cuerpo de la solicitud está vacío." });
+  }
+
+  // 4. Manejo de contraseña (si se incluye en la actualización)
+  if (datosActualizar.password) {
+      // Solo hashear si la contraseña no parece ya hasheada
+      if (!datosActualizar.password.startsWith('$2a$')) {
+          try {
+              datosActualizar.password = await bcrypt.hash(datosActualizar.password, 10);
+          } catch (hashError) {
+              console.error("Error al hashear la contraseña durante la edición:", hashError);
+              return res.status(500).json({ error: "Error interno del servidor al procesar la contraseña." });
+          }
+      }
+  } else {
+      // Importante: Si la contraseña no se envía en el body, asegúrate de no sobrescribir la existente con 'undefined'
+      delete datosActualizar.password; 
+  }
+
+  // 5. Actualizar fechaModificacion automáticamente
+  datosActualizar.fechaModificacion = new Date().toISOString();
+
   try {
-    const id = req.params.id;
-    const {
-      usuario,
-      password,
-      telefono,
-      mail,
-      nombre,
-      apellido,
-      estado,
-      fechaModificacion,
-    } = req.body;
-
-    if (
-      !usuario &&
-      !password &&
-      !telefono &&
-      !mail &&
-      !nombre &&
-      !apellido &&
-      estado === undefined
-    ) {
-      return res.status(400).json({ error: "Nada para actualizar" });
-    }
-
-    const dataActualizada = {
-      ...(usuario && { usuario }),
-      ...(password && { password }),
-      ...(telefono && { telefono }),
-      ...(mail && { mail }),
-      ...(nombre && { nombre }),
-      ...(apellido && { apellido }),
-      estado: estado !== undefined ? estado : undefined,
-      fechaModificacion: fechaModificacion || new Date().toISOString(),
-    };
-
-    const actualizado = await _usuarioService.editar(id, dataActualizada);
-    if (!actualizado) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-
-    res.json({ success: true, mensaje: "Usuario actualizado" });
+      const exito = await _usuarioService.editar(id, datosActualizar);
+      if (exito) {
+          res.status(200).json({ success: true, message: "Usuario actualizado exitosamente." });
+      } else {
+          // Esto podría significar que el usuario no fue encontrado en el servicio
+          res.status(404).json({ success: false, error: "Usuario no encontrado o no se pudo actualizar." });
+      }
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Error al editar usuario", detalle: error.message });
+      console.error("Error al editar usuario:", error);
+      res.status(500).json({ success: false, error: "Error interno del servidor al editar usuario.", detalle: error.message });
   }
 }
 
@@ -176,17 +194,23 @@ async function editar(req, res) {
  * Desactivar usuario (no borrar físicamente)
  */
 async function desactivar(req, res) {
+  const { id } = req.params;
+
+  // 1. Verificación de autorización: solo el propio usuario puede desactivar su perfil
+  if (req.user.idUsuario !== id) {
+      return res.status(403).json({ error: "No autorizado para desactivar este usuario. Solo puedes desactivar tu propio perfil." });
+  }
+
   try {
-    const id = req.params.id;
-    const resultado = await _usuarioService.desactivar(id);
-    if (!resultado) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-    res.json({ success: true, mensaje: "Usuario desactivado" });
+      const resultado = await _usuarioService.desactivar(id);
+      if (resultado) {
+          res.status(200).json({ success: true, message: "Usuario desactivado exitosamente." });
+      } else {
+          res.status(404).json({ success: false, error: "Usuario no encontrado o ya desactivado." });
+      }
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Error al desactivar usuario", detalle: error.message });
+      console.error("Error al desactivar usuario:", error);
+      res.status(500).json({ success: false, error: "Error interno del servidor al desactivar usuario.", detalle: error.message });
   }
 }
 

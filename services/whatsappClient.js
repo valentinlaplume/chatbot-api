@@ -12,6 +12,10 @@ const connectionStatus = {}; // <- Mantenemos el estado actual por usuario
 const reconnectAttempts = {};
 const MAX_ATTEMPTS = 5;
 
+// --- NUEVAS VARIABLES PARA EL DEBOUNCING ---
+const userMessageQueues = new Map(); // Almacena { senderId: { messages: [], timerId: null } }
+const DEBOUNCE_TIME_MS = 15 * 1000; // 15 segundos
+
 async function cargarRespuestasAutomaticas(userId) {
   try {
     const respuestas = await respuestaAutomaticaService.obtenerPorUsuario(
@@ -127,23 +131,21 @@ function createClient(userId) {
   //   }
   // });
 
-
   client.on("message", async (message) => {
     if (message.isStatus || message.fromMe) {
-      return;
+      return; // Ignorar estados y mensajes enviados por el propio bot
     }
 
-    try {
-      const textoRecibido = message.body;
-      const senderId = message.from; // El ID del cliente final que envió el mensaje
-      const instanceId = userId; // El ID del emprendimiento/instancia
+    const textoRecibido = message.body;
+    const senderId = message.from; // El ID del cliente final que envió el mensaje
+    const instanceId = userId; // El ID del emprendimiento/instancia (es el userId del cliente de whatsapp-web.js)
 
-      // --- Lógica de RESPUESTAS AUTOMÁTICAS (primera prioridad) ---
+    try {
+      // --- 1. Lógica de RESPUESTAS AUTOMÁTICAS (primera prioridad, sin debounce) ---
       const respuestas = await respuestaAutomaticaService.obtenerPorUsuario(
         instanceId
       );
       const listaRespuestas = Object.values(respuestas || {});
-      let responseText = "";
       let handledByAutoResponse = false;
 
       for (const respuesta of listaRespuestas) {
@@ -151,39 +153,97 @@ function createClient(userId) {
           (respuesta.emisor === "todos" || respuesta.emisor === senderId) &&
           textoRecibido.toLowerCase().includes(respuesta.mensaje.toLowerCase())
         ) {
-          responseText = respuesta.respuesta;
+          await client.sendMessage(senderId, respuesta.respuesta); // Responde inmediatamente
+          console.log(
+            `✅ Respuesta automática enviada a ${senderId}: "${respuesta.respuesta}"`
+          );
           handledByAutoResponse = true;
           break;
         }
       }
 
-      // --- Lógica de Gemini (si no fue manejado por una respuesta automática) ---
+      // --- 2. Lógica de Gemini (SI NO fue manejado por una respuesta automática y aplica debouncing) ---
       if (!handledByAutoResponse) {
-        // Llama al controlador de chatbot para que genere la respuesta
-        responseText = await chatbotController.handleIncomingWhatsAppMessage({
-          message: textoRecibido,
-          senderId: senderId,
-          instanceId: instanceId,
-        });
-      }
+        // Inicia o reinicia el timer de debouncing para este senderId
+        if (!userMessageQueues.has(senderId)) {
+          userMessageQueues.set(senderId, { messages: [], timerId: null });
+        }
 
-      // AHORA whatsappClient.js ES EL ENCARGADO DE ENVIAR EL MENSAJE
-      if (responseText) {
-        // Solo envía si hay algo que responder
-        await client.sendMessage(senderId, responseText); // Usa el 'client' que recibió el mensaje
+        const userQueue = userMessageQueues.get(senderId);
+        userQueue.messages.push(textoRecibido); // Agrega el mensaje actual a la cola
+
+        // Limpia cualquier timer existente para este usuario
+        if (userQueue.timerId) {
+          clearTimeout(userQueue.timerId);
+        }
+
+        // Configura un nuevo timer
+        userQueue.timerId = setTimeout(async () => {
+          // El timer ha expirado, es hora de procesar los mensajes acumulados
+          const accumulatedMessages = userQueue.messages.join("\n"); // Une todos los mensajes acumulados
+          console.log(
+            `[DEBOUNCE] Procesando mensaje acumulado para ${senderId} (emprendedor ${instanceId}):\n"${accumulatedMessages}"`
+          );
+
+          // Limpia la cola y el timer para este usuario
+          userQueue.messages = [];
+          userQueue.timerId = null; // Reinicia el timerId
+
+          try {
+            // Opcional: Enviar la "señal de escribiendo"
+            // Nota: whatsapp-web.js puede no exponer directamente sendStateTyping/clearState,
+            // a veces es necesario usar funciones de la API interna o librerías auxiliares.
+            // Si tu 'client' no tiene estos métodos, puedes comentarlos.
+            if (client.sendStateTyping) {
+              await client.sendStateTyping(senderId);
+            }
+
+            // Llama al controlador de chatbot para que genere la respuesta
+            const responseText =
+              await chatbotController.handleIncomingWhatsAppMessage({
+                message: accumulatedMessages, // ¡Aquí va el mensaje concatenado!
+                senderId: senderId,
+                instanceId: instanceId,
+              });
+
+            // Enviar la respuesta de Gemini al usuario de WhatsApp
+            if (responseText) {
+              await client.sendMessage(senderId, responseText); // Usa el 'client' que recibió el mensaje
+              console.log(
+                `✅ Mensaje chatbot enviado a ${senderId} desde instanceId ${instanceId}: "${responseText}"`
+              );
+            }
+          } catch (error) {
+            console.error(
+              `❌ Error al procesar mensaje con Gemini para ${senderId}:`,
+              error.message
+            );
+            await client.sendMessage(
+              senderId, // Usar senderId aquí
+              "Lo siento, hubo un problema al procesar tu solicitud con el asistente. Por favor, intenta de nuevo más tarde."
+            );
+          } finally {
+            // Opcional: Remover la señal de escribiendo
+            if (client.clearState) {
+              await client.clearState(senderId);
+            }
+          }
+        }, DEBOUNCE_TIME_MS);
+
         console.log(
-          `✅ Mensaje enviado a ${senderId} desde instanceId ${instanceId}: "${responseText}"`
+          `[DEBOUNCE] Mensaje recibido de ${senderId}. Debouncing por ${
+            DEBOUNCE_TIME_MS / 1000
+          } segundos.`
         );
-      }
+      } // Fin if (!handledByAutoResponse)
     } catch (error) {
       console.error(
-        "❌ Error procesando mensaje en whatsappClient.js (onMessage):",
+        "❌ Error general procesando mensaje en whatsappClient.js (onMessage):",
         error.message
       );
-      // Si ocurre un error, puedes enviar un mensaje de fallback al usuario final
       await client.sendMessage(
-        message.from,
-        "Lo siento, hubo un problema al procesar tu solicitud. Por favor, intenta de nuevo más tarde."
+        senderId, // Usar senderId aquí
+        "Lo siento, hubo un problema inesperado en el sistema. Por favor, intenta de nuevo más tarde."
       );
     }
   });
