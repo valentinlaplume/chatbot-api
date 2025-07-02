@@ -1,0 +1,10 @@
+// routes/googleAuthRoutes.js
+const express = require("express");
+const router = express.Router();
+const googleAuthController = require("../controllers/googleAuthController");
+const { checkAuth } = require("../middlewares/authMiddleware");
+
+router.get("/auth-url", checkAuth, googleAuthController.obtenerLinkAutorizacion);
+router.post("/callback", checkAuth, googleAuthController.recibirCodigo);
+
+module.exports = router;

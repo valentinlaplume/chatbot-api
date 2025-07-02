@@ -42,6 +42,9 @@ app.use(checkAuth); // protege lo que sigue
 // Rutas privadas
 app.use("/api/respuestas", respuestaRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
+app.use("/api/google", require("./routes/googleCalendarRoutes"));
+app.use("/api/google", require("./routes/googleAuthRoutes"));
+
 
 app.locals.createClient = createClient;  // <-- esto es clave
 
